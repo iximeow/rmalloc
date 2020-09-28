@@ -1,6 +1,6 @@
 [package]
 name = "rmalloc"
-version = "1.0.0"
+version = "1.0.1"
 authors = ["iximeow <me@iximeow.net>"]
 license = "0BSD"
 edition = "2018"
