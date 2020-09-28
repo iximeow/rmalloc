@@ -31,3 +31,7 @@ attacks. because it is in the krenel, it is also fast.
 #### `no_std`
 
 `rmalloc` is `no_std`. it is appropriate for embedded usage to replace glibc or other `malloc`.
+
+#### the name `rmalloc`
+
+this is a joke crate. if you'd like the name for pretty much any more serious purpose feel free to email me.
