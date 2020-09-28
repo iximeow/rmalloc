@@ -1,0 +1,17 @@
+[package]
+name = "rmalloc"
+version = "0.1.0"
+authors = ["iximeow <me@iximeow.net>"]
+edition = "2018"
+description = "randomized malloc"
+
+[lib]
+crate-type = ["cdylib"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+"libc" = "0.2.77"
+"nix" = "0.18.0"
+"mersenne_twister" = "1.1.1"
+"rand" = "0.4.2"
