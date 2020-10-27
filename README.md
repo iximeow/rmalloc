@@ -54,3 +54,10 @@ attacks. because it is in the krenel, it is also fast.
 #### the name `rmalloc`
 
 this is a joke crate. if you'd like the name for pretty much any more serious purpose feel free to email me.
+
+#### changelog
+`1.1.0`
+* made safety checks optional to improve `rmalloc` compatibility
+
+`1.0.1`
+* first release of a new secure and randomized mallocator
