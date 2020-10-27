@@ -16,7 +16,15 @@ then run the program you want to secure like normal, but with
 ```
 LD_PRELOAD=./target/release/librmalloc.so cargo build
 ```
-in the `rmalloc` repo should complete without error.
+in the `rmalloc` repo should .. almost .. complete without error.
+
+### "help, my program reports that it crashed with `Segmentation fault`!!!!!"
+
+it probably caught the segfault rmalloc uses to probe if a page can be used for
+a new allocation, and thought the fault was due to its own behavior. `vim` and
+`collect2` both do this. some applications do not chain signal handlers on the
+assumption they have exclusive interest in signals or signal handling, so
+naively overwriting the `SIGSEGV` handler will irreparably break `rmalloc`.
 
 #### theory
 
