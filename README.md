@@ -30,7 +30,7 @@ for the security-minded user, `safety-checks` enables off-by-default checks to
 
 it probably caught the segfault rmalloc uses to probe if a page can be used for
 a new allocation, and thought the fault was due to its own behavior. `vim`,
-`bash`, and `collect2` both do this, to name a few. some applications do not
+`bash`, and `collect2` do this, to name a few. some applications do not
 chain signal handlers on the assumption they have exclusive interest in signals
 or signal handling, so naively overwriting the `SIGSEGV` handler will
 irreparably break `rmalloc`.
