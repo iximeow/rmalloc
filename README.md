@@ -1,7 +1,8 @@
 ## `rmalloc`
 
 > what's the point of an address space this large if we don't use chunks of it randomly
-* a wise software engineer
+>
+> \- a wise software engineer
 
 `rmalloc` is a `malloc` (and `calloc`, and `realloc`, and, of course, `free`)
 implementation that improves upon traditional `malloc` implementations by
