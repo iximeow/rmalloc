@@ -16,15 +16,23 @@ then run the program you want to secure like normal, but with
 ```
 LD_PRELOAD=./target/release/librmalloc.so cargo build
 ```
-in the `rmalloc` repo should .. almost .. complete without error.
+in the `rmalloc` repo should complete without error.
+
+for the security-minded user, `safety-checks` enables off-by-default checks to
+  confirm that memory is not double-allocated. these checks can cause
+  instability in many applications and are disabled by default. to build
+  `rmalloc` with safety checks enabled, `cargo build --release --features
+  safety-checks`. IMPORTANT: if you intend to use rmalloc with safety checks
+  enabled, read the following section!
 
 ### "help, my program reports that it crashed with `Segmentation fault`!!!!!"
 
 it probably caught the segfault rmalloc uses to probe if a page can be used for
-a new allocation, and thought the fault was due to its own behavior. `vim` and
-`collect2` both do this. some applications do not chain signal handlers on the
-assumption they have exclusive interest in signals or signal handling, so
-naively overwriting the `SIGSEGV` handler will irreparably break `rmalloc`.
+a new allocation, and thought the fault was due to its own behavior. `vim`,
+`bash`, and `collect2` both do this, to name a few. some applications do not
+chain signal handlers on the assumption they have exclusive interest in signals
+or signal handling, so naively overwriting the `SIGSEGV` handler will
+irreparably break `rmalloc`.
 
 #### theory
 

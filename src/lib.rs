@@ -2,12 +2,11 @@
 #![feature(asm)]
 #![feature(llvm_asm)]
 
-use libc::{c_int, c_void, siginfo_t, size_t};
+use libc::{c_void, size_t};
 use mersenne_twister::MersenneTwister;
 use rand::{Rng, SeedableRng};
 
 use nix::sys::mman::{mmap, munmap, MapFlags, ProtFlags};
-use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
@@ -50,17 +49,23 @@ impl RmallocState {
                 rng,
                 page_unused: true,
             };
-            let mut segv_handler_mask = SigSet::empty();
-            segv_handler_mask.add(Signal::SIGBUS);
-            segv_handler_mask.add(Signal::SIGSEGV);
-            let sa = SigAction::new(
-                SigHandler::SigAction(handle_segv),
-                SaFlags::SA_RESTART | SaFlags::SA_SIGINFO,
-                segv_handler_mask,
-            );
+            #[cfg(feature="safety-checks")]
+            {
+                use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+                let mut segv_handler_mask = SigSet::empty();
+                segv_handler_mask.add(Signal::SIGBUS);
+                segv_handler_mask.add(Signal::SIGSEGV);
+                let sa = SigAction::new(
+                    SigHandler::SigAction(handle_segv),
+                    SaFlags::SA_RESTART | SaFlags::SA_SIGINFO,
+                    segv_handler_mask,
+                );
+                unsafe {
+                    let _sigsegv = sigaction(Signal::SIGSEGV, &sa).expect("can set sigsegv handler");
+                    let _sigbus = sigaction(Signal::SIGBUS, &sa).expect("can set sigbus handler");
+                }
+            }
             unsafe {
-                let _sigsegv = sigaction(Signal::SIGSEGV, &sa).expect("can set sigsegv handler");
-                let _sigbus = sigaction(Signal::SIGBUS, &sa).expect("can set sigbus handler");
                 core::ptr::write(self.state.get().as_mut().unwrap().as_mut_ptr(), inner);
             }
             self.initializing.store(2, Ordering::SeqCst);
@@ -98,7 +103,14 @@ impl RmallocState {
                 continue;
             }
 
+            // might warn if safety checks are disabled
+            #[allow(unused_mut)]
             let mut probe_failed = false;
+
+            // if the user has requested safety checks, verify that this region is actually unused.
+            // chances are it isn't, and verifying availability can itself cause instability, so
+            // these checks are off by default.
+            #[cfg(feature="safety-checks")]
             for i in 0..page_count {
                 if !self.probe_page(page_address + (i * PAGE_SIZE)) {
                     probe_failed = true;
@@ -127,6 +139,7 @@ impl RmallocState {
     }
 
     // return true if the page is not mapped
+    #[cfg(feature="safety-checks")]
     fn probe_page(&self, page_addr: usize) -> bool {
         unsafe {
             let ptr = (page_addr as *mut AtomicU8).as_ref().unwrap();
@@ -208,9 +221,10 @@ impl<'a> Drop for MallocGuard<'a> {
     }
 }
 
+#[cfg(feature="safety-checks")]
 pub extern "C" fn handle_segv(
-    _signum: c_int,
-    _siginfo_ptr: *mut siginfo_t,
+    _signum: libc::c_int,
+    _siginfo_ptr: *mut libc::siginfo_t,
     ucontext_ptr: *mut c_void,
 ) {
     // ignore _signum: this is only installed for sigsegv and sigbus, both of whom we want to

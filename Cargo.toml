@@ -16,6 +16,11 @@ crate-type = ["cdylib"]
 "mersenne_twister" = "1.1.1"
 "rand" = "0.4.2"
 "cfg-if" = "0.1"
-"yaxpeax-x86" = { version = "0.1.3", default-features = false, features = []}
-"yaxpeax-arch" = { version = "0.0.4", default-features = false, features = []}
-num-traits = "*"
+"yaxpeax-x86" = { version = "0.1.3", default-features = false, features = [], optional = true }
+"yaxpeax-arch" = { version = "0.0.4", default-features = false, features = [], optional = true }
+num-traits = { version = "*", optional = true }
+
+[features]
+default = []
+
+safety-checks = ["yaxpeax-x86", "yaxpeax-arch", "num-traits"]
