@@ -1,4 +1,6 @@
 #![no_std]
+#![feature(asm)]
+#![feature(llvm_asm)]
 
 use libc::{c_int, c_void, siginfo_t, size_t};
 use mersenne_twister::MersenneTwister;
@@ -13,7 +15,7 @@ use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 struct RmallocInner {
     pub rng: MersenneTwister,
-    pub probe_fail: bool,
+    pub page_unused: bool,
 }
 
 struct RmallocState {
@@ -46,7 +48,7 @@ impl RmallocState {
             let rng: MersenneTwister = SeedableRng::from_seed(0xaaaA_aaAA_aaaA_aaAa);
             let inner = RmallocInner {
                 rng,
-                probe_fail: false,
+                page_unused: true,
             };
             let mut segv_handler_mask = SigSet::empty();
             segv_handler_mask.add(Signal::SIGBUS);
@@ -72,6 +74,8 @@ impl RmallocState {
         }
     }
 
+    #[no_mangle]
+    #[inline(never)]
     fn mallocate(&self, page_count: usize) -> *mut c_void {
         let _guard = self.begin_mallocate();
 
@@ -122,6 +126,7 @@ impl RmallocState {
         }
     }
 
+    // return true if the page is not mapped
     fn probe_page(&self, page_addr: usize) -> bool {
         unsafe {
             let ptr = (page_addr as *mut AtomicU8).as_ref().unwrap();
@@ -133,9 +138,10 @@ impl RmallocState {
                 .as_mut_ptr()
                 .as_mut()
                 .unwrap()
-                .probe_fail = false;
+                .page_unused = false;
             // do the probe. this is a read and a write
-            ptr.fetch_xor(0, Ordering::SeqCst);
+            llvm_asm!(
+                "lock xor byte ptr [rax], 0": : "{rax}"(ptr) : "cc" : "intel");
             // if the probe failed, it's possible this page is r-- and otherwise already allocated. try
             // again to confirm we can't read from it at all.
             if self
@@ -146,7 +152,7 @@ impl RmallocState {
                 .as_mut_ptr()
                 .as_mut()
                 .unwrap()
-                .probe_fail
+                .page_unused
             {
                 self.state
                     .get()
@@ -155,11 +161,12 @@ impl RmallocState {
                     .as_mut_ptr()
                     .as_mut()
                     .unwrap()
-                    .probe_fail = false;
-                ptr.load(Ordering::SeqCst);
+                    .page_unused = false;
+                llvm_asm!(
+                    "mov cl, byte ptr [rax]": : "{rax}"(ptr) : "cl", "cc" : "intel");
             }
 
-            !self
+            self
                 .state
                 .get()
                 .as_mut()
@@ -167,7 +174,7 @@ impl RmallocState {
                 .as_mut_ptr()
                 .as_mut()
                 .unwrap()
-                .probe_fail
+                .page_unused
         }
     }
 
@@ -204,7 +211,7 @@ impl<'a> Drop for MallocGuard<'a> {
 pub extern "C" fn handle_segv(
     _signum: c_int,
     _siginfo_ptr: *mut siginfo_t,
-    _ucontext_ptr: *mut c_void,
+    ucontext_ptr: *mut c_void,
 ) {
     // ignore _signum: this is only installed for sigsegv and sigbus, both of whom we want to
     // handle
@@ -228,7 +235,73 @@ pub extern "C" fn handle_segv(
                 .as_mut_ptr()
                 .as_mut()
                 .unwrap()
-                .probe_fail = true;
+                .page_unused = true;
+        }
+
+        // now, so as to not fault again, we must move the instruction pointer forward past the
+        // faulting instruction.
+        cfg_if::cfg_if! {
+            if #[cfg(target_arch = "x86_64")] {
+                cfg_if::cfg_if! {
+                    if #[cfg(target_pointer_width = "64")] {
+                    } else {
+                        panic!("unsupported target pointer width");
+                    }
+                }
+
+                let ip_addr = {
+                    cfg_if::cfg_if! {
+                        if #[cfg(target_os = "linux")] {
+                            let uc_mcontext_offset =
+                                8 + // `unsigned long int __ctx(uc_flags)
+                                8 + // 64-bit `struct ucontext_t *uc_link`
+                                8 + 4 + 8 + 4; // stack_t, void*, int, size_t, padding
+                            let rip_offset = 16 * 8; // 16 gp regs before rip
+                            (ucontext_ptr as usize + uc_mcontext_offset + rip_offset) as *mut usize
+                        } else if #[cfg(target_os = "macos")] {
+                            let exception_state64_size = 2 + 2 + 4 + 8;
+                            (ucontext_ptr as usize + exception_state64_size + 8 * 16) as *mut usize
+                        } else {
+                            panic!("unsupported OS (don't know ucontext layout)");
+                        }
+                    }
+                };
+
+                use yaxpeax_x86::long_mode::{Arch as amd64};
+                use yaxpeax_arch::{Arch, AddressBase, Decoder, LengthedInstruction};
+                use num_traits::identities::Zero;
+
+                let ip = unsafe { *ip_addr };
+                let buf = unsafe { core::slice::from_raw_parts(ip as *const u8, 16) };
+                let decoder = <amd64 as Arch>::Decoder::default();
+                let inst = decoder.decode(buf.iter().cloned()).expect("can decode faulting instruction");
+                let new_ip = ip + (<amd64 as Arch>::Address::zero() + inst.len()).to_linear();
+                unsafe { *ip_addr = new_ip };
+
+                // "atomic"_xor uses a cas loop indebug builds. if this is the cmpxchg inside we
+                // need to lie that the swap succeeded so it moves on.
+                if inst.opcode() == yaxpeax_x86::long_mode::Opcode::CMPXCHG {
+                    let rflags_ptr = { cfg_if::cfg_if! {
+                        if #[cfg(target_os = "linux")] {
+                            let uc_mcontext_offset =
+                                8 + // `unsigned long int __ctx(uc_flags)
+                                8 + // 64-bit `struct ucontext_t *uc_link`
+                                8 + 4 + 8 + 4; // stack_t, void*, int, size_t, padding
+                            let rflags_offset = 17 * 8; // 17 regs before REG_EFL
+                            (ucontext_ptr as usize + uc_mcontext_offset + rflags_offset) as *mut usize
+                        } else if #[cfg(target_os = "macos")] {
+                            let exception_state64_size = 2 + 2 + 4 + 8;
+                            (ucontext_ptr as usize + exception_state64_size + 8 * 17) as *mut usize
+                        } else {
+                            panic!("unsupported OS (don't know ucontext layout)");
+                        }
+                    }};
+                    let rflags_ptr = rflags_ptr as *mut u64;
+                    unsafe { *rflags_ptr |= 0x40; }
+                }
+            } else {
+                panic!("unsupported rmalloc architecture");
+            }
         }
     } else {
         // spurious malloc, ouch
